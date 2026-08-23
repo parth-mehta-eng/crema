@@ -1,0 +1,27 @@
+project_id = "crema"
+
+[api]
+port = 55321
+
+[db]
+port = 55322
+shadow_port = 55320
+
+[studio]
+port = 55323
+
+[local_smtp]
+enabled = false
+
+[edge_runtime]
+inspector_port = 58083
+
+[analytics]
+enabled = false
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[functions.coffee-discovery]
+verify_jwt = true

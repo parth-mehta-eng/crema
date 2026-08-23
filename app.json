@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Crema",
+    "slug": "crema-coffee",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "crema",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.crema"
+    },
+    "android": {
+      "package": "com.example.crema",
+      "adaptiveIcon": {
+        "backgroundColor": "#F8F4EE"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-sqlite",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Crema admins to choose owned or licensed recipe photography."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

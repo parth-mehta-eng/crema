@@ -1,0 +1,185 @@
+import { supabase } from '@/lib/supabase';
+import type { AuthoringDraft } from '@/services/authoring/domain';
+
+export type AdminSource = {
+  id: string;
+  name: string;
+  slug: string;
+  base_url: string;
+  menu_url: string;
+  enabled: boolean;
+  parser_type: 'json_ld' | 'generic' | 'custom';
+  cooldown_minutes: number;
+  last_imported_at: string | null;
+};
+
+export type AdminImportRun = {
+  id: string;
+  source_id: string;
+  status: 'running' | 'succeeded' | 'partial' | 'failed' | 'skipped';
+  started_at: string;
+  completed_at: string | null;
+  discovered_count: number;
+  new_count: number;
+  duplicate_count: number;
+  updated_count: number;
+  failed_count: number;
+  error_message: string | null;
+  coffee_sources: { name: string } | null;
+};
+
+export type AdminDiscoveredDrink = {
+  id: string;
+  source_id: string;
+  external_name: string;
+  external_description: string;
+  source_url: string;
+  category: string;
+  temperature: string;
+  flavor_notes: string[];
+  mentioned_ingredients: string[];
+  status: 'new' | 'reviewed' | 'ignored' | 'converted';
+  discovered_at: string;
+  coffee_sources: { name: string } | null;
+};
+
+export type AdminRecipeDraft = {
+  id: string;
+  discovered_drink_id: string | null;
+  proposed_title: string;
+  inspiration_label: string;
+  source_name: string;
+  source_url: string;
+  description: string;
+  category: string;
+  temperature: string;
+  flavor_notes: string[];
+  suggested_ingredients: string[];
+  suggested_equipment: string[];
+  suggested_steps: string[];
+  needs_testing: boolean;
+  status: 'draft' | 'tested' | 'ready' | 'published' | 'archived';
+  tested: boolean;
+  slug: string | null;
+  updated_at: string;
+  published_recipe_id: string | null;
+  difficulty: string | null;
+  prep_minutes: number | null;
+  servings: number | null;
+  hero_image_url: string | null;
+  placeholder_approved: boolean;
+  recipe_draft_ingredients?: Array<{ id: string }>;
+  recipe_draft_steps?: Array<{ id: string }>;
+  recipe_draft_equipment?: Array<{ equipment_id: string }>;
+  recipe_draft_collections?: Array<{ recipe_collections: { title: string } | null }>;
+  created_at: string;
+};
+
+export type AdminDashboardData = {
+  sources: AdminSource[];
+  runs: AdminImportRun[];
+  drinks: AdminDiscoveredDrink[];
+  drafts: AdminRecipeDraft[];
+  ingredients: Array<{ id: string; name: string; canonical_name: string; category: string; aliases: string[]; default_unit: string | null; active: boolean }>;
+  collections: Array<{ id: string; title: string; description: string; sort_order: number; active: boolean }>;
+};
+
+export type AdminAction =
+  | { action: 'import-source'; sourceId: string }
+  | { action: 'update-source-enabled'; sourceId: string; enabled: boolean }
+  | { action: 'convert-drink'; drinkId: string }
+  | { action: 'update-drink-status'; drinkId: string; status: 'reviewed' | 'ignored' }
+  | { action: 'update-draft-status'; draftId: string; status: 'draft' | 'tested' | 'ready' | 'archived' }
+  | {
+      action: 'save-draft';
+      draftId: string;
+      proposedTitle: string;
+      description: string;
+      suggestedIngredients: string[];
+      suggestedEquipment: string[];
+      suggestedSteps: string[];
+    }
+  | { action: 'save-authoring-draft'; draft: AuthoringDraft; expectedVersion: number }
+  | { action: 'transition-authoring-draft'; draftId: string; status: 'draft' | 'tested' | 'ready' | 'archived' }
+  | { action: 'publish-authoring-draft'; draftId: string }
+  | { action: 'unpublish-authoring-draft'; draftId: string }
+  | { action: 'duplicate-authoring-draft'; draftId: string }
+  | { action: 'save-ingredient'; ingredient: { id: string; name: string; canonicalName: string; category: string; aliases: string[]; defaultUnit: string | null; active: boolean } }
+  | { action: 'save-collection'; collection: { id: string; title: string; description: string; sortOrder: number; active: boolean } };
+
+function requireSupabase() {
+  if (!supabase) throw new Error('Configure Supabase before opening the admin workflow.');
+  return supabase;
+}
+
+export async function getAdminAccess() {
+  const client = requireSupabase();
+  const { data, error } = await client.auth.getUser();
+  if (error) throw error;
+  return {
+    signedIn: Boolean(data.user),
+    isAdmin: data.user?.app_metadata?.role === 'admin',
+  };
+}
+
+export async function signInAdmin(email: string, password: string) {
+  const client = requireSupabase();
+  const { data, error } = await client.auth.signInWithPassword({
+    email: email.trim(),
+    password,
+  });
+  if (error) throw error;
+  if (data.user?.app_metadata?.role !== 'admin') {
+    await client.auth.signOut();
+    throw new Error('This account does not have Coffee Discovery admin access.');
+  }
+  return data.user;
+}
+
+export async function signOutAdmin() {
+  const client = requireSupabase();
+  const { error } = await client.auth.signOut();
+  if (error) throw error;
+}
+
+export async function loadAdminDashboard(): Promise<AdminDashboardData> {
+  const client = requireSupabase();
+  const [sources, runs, drinks, drafts, ingredients, collections] = await Promise.all([
+    client.from('coffee_sources').select('*').order('name'),
+    client.from('menu_import_runs').select('*, coffee_sources(name)').order('started_at', { ascending: false }).limit(50),
+    client.from('discovered_drinks').select('*, coffee_sources(name)').order('discovered_at', { ascending: false }).limit(200),
+    client.from('recipe_drafts').select('*, recipe_draft_ingredients(id), recipe_draft_steps(id), recipe_draft_equipment(equipment_id), recipe_draft_collections(recipe_collections(title))').order('updated_at', { ascending: false }).limit(200),
+    client.from('ingredients').select('id,name,canonical_name,category,aliases,default_unit,active').order('name'),
+    client.from('recipe_collections').select('id,title,description,sort_order,active').order('sort_order'),
+  ]);
+  const error = sources.error ?? runs.error ?? drinks.error ?? drafts.error ?? ingredients.error ?? collections.error;
+  if (error) throw error;
+
+  return {
+    sources: (sources.data ?? []) as AdminSource[],
+    runs: (runs.data ?? []) as unknown as AdminImportRun[],
+    drinks: (drinks.data ?? []) as unknown as AdminDiscoveredDrink[],
+    drafts: (drafts.data ?? []) as AdminRecipeDraft[],
+    ingredients: ingredients.data ?? [],
+    collections: collections.data ?? [],
+  };
+}
+
+export async function runAdminAction(action: AdminAction) {
+  const client = requireSupabase();
+  const { data, error } = await client.functions.invoke('coffee-discovery', { body: action });
+  if (error) {
+    const context = 'context' in error ? (error as { context?: Response }).context : undefined;
+    if (context) {
+      try {
+        const payload = await context.clone().json() as { error?: string };
+        if (payload.error) throw new Error(payload.error);
+      } catch (contextError) {
+        if (contextError instanceof Error && contextError.message !== 'Unexpected end of JSON input') throw contextError;
+      }
+    }
+    throw error;
+  }
+  if (data?.error) throw new Error(data.error);
+  return data?.data;
+}
