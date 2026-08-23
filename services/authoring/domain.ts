@@ -67,6 +67,7 @@ export type AuthoringDraft = {
   heroImageBytes?: number | null;
   placeholderApproved: boolean;
   needsTesting: boolean;
+  contentNotes: string;
   flavorNotes: string[];
   ingredients: DraftIngredient[];
   steps: DraftStep[];

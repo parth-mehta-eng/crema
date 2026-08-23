@@ -290,6 +290,19 @@ export default function RecipeDraftEditor() {
         {fieldError('heroImageUrl') ? <AppText style={styles.fieldError}>{fieldError('heroImageUrl')}</AppText> : null}
       </Section>
 
+      <Section title="Content quality" help="These drive the admin quality dashboard and the review queue.">
+        <View style={styles.chips}>
+          <View style={styles.lifecycleStep}><AppText style={styles.chipText}>image: {draft.heroImageUrl ? 'approved' : draft.placeholderApproved ? 'placeholder' : 'missing'}</AppText></View>
+        </View>
+        <Choices
+          label="Placeholder image policy"
+          choices={[{ id: 'placeholder', label: 'Approve publishing with the Crema placeholder (no photo yet)' }]}
+          selected={draft.placeholderApproved ? ['placeholder'] : []}
+          onSelect={() => change('placeholderApproved', !draft.placeholderApproved)}
+        />
+        <Field label="Content notes (internal — testing notes, follow-ups, review context)" value={draft.contentNotes} onChangeText={(value) => change('contentNotes', value)} multiline />
+      </Section>
+
       <Section title="Ingredients" help="Canonical ingredients stay structured. Repeated ingredients require a meaningful display name or preparation difference.">
         {draft.ingredients.map((row, index) => <View key={row.id} style={styles.repeatCard}>
           <View style={styles.repeatHeader}><AppText style={styles.repeatTitle}>Ingredient {index + 1}</AppText><View style={styles.actionsInline}><Button label="↑" secondary disabled={index === 0} onPress={() => move(draft.ingredients, index, -1, 'ingredients')} /><Button label="↓" secondary disabled={index === draft.ingredients.length - 1} onPress={() => move(draft.ingredients, index, 1, 'ingredients')} /><Button label="Remove" secondary danger onPress={() => change('ingredients', normalizePositions(draft.ingredients.filter((_, itemIndex) => itemIndex !== index)))} /></View></View>

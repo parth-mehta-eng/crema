@@ -47,13 +47,25 @@ export const RecipeCard = memo(function RecipeCard({
     >
       <View style={[styles.surface, compact && styles.compactSurface]}>
         <View style={[styles.media, compact && { width: compactImageWidth }]}>
-          <Image
-            accessibilityLabel={recipe.name}
-            source={recipe.image}
-            style={[styles.image, compact ? styles.compactImage : { height: imageHeight }]}
-            contentFit="cover"
-            transition={200}
-          />
+          {recipe.image === 'crema://placeholder' ? (
+            <View
+              style={[
+                styles.image,
+                styles.placeholderImage,
+                compact ? styles.compactImage : { height: imageHeight },
+              ]}
+            >
+              <Ionicons name="cafe-outline" size={compact ? 28 : 36} color={colors.textMuted} />
+            </View>
+          ) : (
+            <Image
+              accessibilityLabel={recipe.imageAlt || recipe.name}
+              source={recipe.image}
+              style={[styles.image, compact ? styles.compactImage : { height: imageHeight }]}
+              contentFit="cover"
+              transition={200}
+            />
+          )}
           <Pressable
             accessibilityLabel={`${saved ? 'Remove' : 'Add'} ${recipe.name} ${saved ? 'from' : 'to'} favorites`}
             accessibilityRole="button"
@@ -120,6 +132,10 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     backgroundColor: colors.border,
+  },
+  placeholderImage: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   compactImage: {
     height: 128,

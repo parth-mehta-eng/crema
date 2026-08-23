@@ -32,7 +32,43 @@ test('getRecipeMatch ignores optional ingredients and tracks equipment separatel
   assert.deepEqual(match.missingIngredients.map((item) => item.id), ['milk']);
   assert.deepEqual(match.ownedEquipment, ['espresso-machine']);
   assert.deepEqual(match.missingEquipment, ['frother']);
-  assert.equal(match.classification, 'Missing 2');
+  // Missing equipment is reported distinctly from missing ingredients, even though an
+  // ingredient is also missing here.
+  assert.equal(match.classification, 'Equipment Missing');
+});
+
+test('getRecipeMatch classifies by missing-ingredient count when equipment is fully owned', () => {
+  const base = { id: 'test', equipment: ['espresso-machine'] };
+  const owned = ['espresso-machine'];
+
+  assert.equal(
+    getRecipeMatch({ ...base, ingredients: [{ id: 'espresso', name: 'Espresso', quantity: 1, unit: 'shot' }] }, ['espresso'], owned)
+      .classification,
+    'Perfect Match',
+  );
+  assert.equal(
+    getRecipeMatch(
+      { ...base, ingredients: [{ id: 'espresso', name: 'Espresso', quantity: 1, unit: 'shot' }, { id: 'milk', name: 'Milk', quantity: 1, unit: 'cup' }] },
+      [],
+      owned,
+    ).classification,
+    'Missing 2',
+  );
+  assert.equal(
+    getRecipeMatch(
+      {
+        ...base,
+        ingredients: [
+          { id: 'espresso', name: 'Espresso', quantity: 1, unit: 'shot' },
+          { id: 'milk', name: 'Milk', quantity: 1, unit: 'cup' },
+          { id: 'ice', name: 'Ice', quantity: 1, unit: 'cup' },
+        ],
+      },
+      [],
+      owned,
+    ).classification,
+    'Missing 3+',
+  );
 });
 
 test('getCoffeeBarSummary counts makeable recipes and true one-ingredient-away recipes', () => {

@@ -8,7 +8,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "node --test tests/recipe-utils.test.cjs tests/recipe-search.test.cjs tests/recipe-mapper.test.cjs tests/coffee-discovery.test.cjs tests/recipe-authoring.test.cjs",
+    "test": "node --test tests/recipe-utils.test.cjs tests/recipe-search.test.cjs tests/recipe-mapper.test.cjs tests/coffee-discovery.test.cjs tests/recipe-authoring.test.cjs tests/daily-brew.test.cjs",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
     "doctor": "expo-doctor",

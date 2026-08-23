@@ -21,7 +21,7 @@ enabled = false
 
 [db.seed]
 enabled = true
-sql_paths = ["./seed.sql"]
+sql_paths = ["./seed.sql", "./seeds/discovered_drinks.sql", "./seeds/draft_templates.sql"]
 
 [functions.coffee-discovery]
 verify_jwt = true

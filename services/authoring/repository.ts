@@ -82,7 +82,8 @@ function mapDraft(row: DraftRow): AuthoringDraft {
     heroImageUrl: String(row.hero_image_url ?? ''), heroImagePath: String(row.hero_image_path ?? ''),
     heroImageAlt: String(row.hero_image_alt ?? ''), heroImageMime: String(row.hero_image_mime ?? ''),
     heroImageBytes: numberOrNull(row.hero_image_bytes), placeholderApproved: Boolean(row.placeholder_approved),
-    needsTesting: Boolean(row.needs_testing), flavorNotes: Array.isArray(row.flavor_notes) ? row.flavor_notes.map(String) : [],
+    needsTesting: Boolean(row.needs_testing), contentNotes: String(row.content_notes ?? ''),
+    flavorNotes: Array.isArray(row.flavor_notes) ? row.flavor_notes.map(String) : [],
     ingredients, steps, equipment, tagIds: (row.recipe_draft_tags ?? []).map((item) => item.tag_id),
     publishedRecipeId: row.published_recipe_id ? String(row.published_recipe_id) : null, version: Number(row.version ?? 1),
   };

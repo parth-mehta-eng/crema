@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { AppText, DisplayText } from '@/components/AppText';
@@ -9,12 +9,30 @@ import { RecipeCard } from '@/components/RecipeCard';
 import { Screen } from '@/components/Screen';
 import { SearchBar } from '@/components/SearchBar';
 import { colors, font, radius, spacing } from '@/constants/theme';
+import { getRecipeMatch } from '@/lib/recipe-utils';
 import { searchRecipes } from '@/services/recipes/repository';
-import type { RecipeFilter } from '@/services/recipes/search';
+import { isInventoryAwareFilter, type RecipeFilter } from '@/services/recipes/search';
+import { useCoffeeBarStore } from '@/store/useCoffeeBarStore';
 import { useRecipesStore } from '@/store/useRecipesStore';
 import type { Recipe } from '@/types/recipe';
 
-const categories: RecipeFilter[] = ['Iced', 'Hot', 'Espresso', 'Sweet', 'Surprise Me'];
+const categories: RecipeFilter[] = [
+  'Iced',
+  'Hot',
+  'Espresso',
+  'Coffee',
+  'Cold Brew',
+  'Matcha',
+  'Sweet',
+  'Quick',
+  'Easy',
+  'Coffee Shop Inspired',
+  'Around the World',
+  'Crema Originals',
+  'Can Make Now',
+  'Missing One Ingredient',
+  'Surprise Me',
+];
 
 function validFilter(value: string | undefined): RecipeFilter | null {
   return categories.find((category) => category === value) ?? null;
@@ -23,6 +41,8 @@ function validFilter(value: string | undefined): RecipeFilter | null {
 export default function Search() {
   const { filter: routeFilter } = useLocalSearchParams<{ filter?: string }>();
   const recipes = useRecipesStore((state) => state.recipes);
+  const ingredientInventory = useCoffeeBarStore((state) => state.ingredients);
+  const equipmentInventory = useCoffeeBarStore((state) => state.equipment);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<RecipeFilter | null>(() => validFilter(routeFilter));
   const [results, setResults] = useState<Recipe[]>(recipes);
@@ -47,6 +67,16 @@ export default function Search() {
       clearTimeout(timeout);
     };
   }, [filter, query, recipes, retryKey]);
+
+  const visibleResults = useMemo(() => {
+    if (!isInventoryAwareFilter(filter)) return results;
+    return results.filter((recipe) => {
+      const match = getRecipeMatch(recipe, ingredientInventory, equipmentInventory);
+      if (filter === 'Can Make Now') return match.classification === 'Perfect Match';
+      if (filter === 'Missing One Ingredient') return match.classification === 'Missing 1';
+      return true;
+    });
+  }, [equipmentInventory, filter, ingredientInventory, results]);
 
   const clearSearch = () => {
     setQuery('');
@@ -90,9 +120,9 @@ export default function Search() {
         </View>
       ) : null}
 
-      {loading && results.length === 0 ? <LoadingState label="Searching recipes" /> : null}
+      {loading && visibleResults.length === 0 ? <LoadingState label="Searching recipes" /> : null}
 
-      {!loading && results.length === 0 ? (
+      {!loading && visibleResults.length === 0 ? (
         <EmptyState
           icon="search-outline"
           title="No recipes found"
@@ -102,10 +132,13 @@ export default function Search() {
         />
       ) : null}
 
-      {results.length > 0 ? (
+      {visibleResults.length > 0 ? (
         <View style={styles.list}>
+          <AppText style={styles.resultCount}>
+            {visibleResults.length} {visibleResults.length === 1 ? 'recipe' : 'recipes'}
+          </AppText>
           {loading ? <AppText style={styles.updating}>Updating results…</AppText> : null}
-          {results.map((recipe) => (
+          {visibleResults.map((recipe) => (
             <RecipeCard key={recipe.id} recipe={recipe} compact />
           ))}
         </View>
@@ -165,6 +198,12 @@ const styles = StyleSheet.create({
   updating: {
     marginBottom: spacing.md,
     color: colors.textSecondary,
+  },
+  resultCount: {
+    marginBottom: spacing.md,
+    fontSize: 12,
+    fontFamily: font.medium,
+    color: colors.textMuted,
   },
   list: {
     padding: spacing.xl,

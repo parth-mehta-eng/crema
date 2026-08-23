@@ -21,6 +21,10 @@ type RecipeStepRow = {
   timer_seconds: number | null;
 };
 
+type RecipeCollectionRow = {
+  recipe_collections: { title: string } | null;
+};
+
 export type RecipeRow = {
   id: string;
   slug: string;
@@ -29,15 +33,24 @@ export type RecipeRow = {
   inspiration: string;
   description: string;
   image_url: string;
+  image_alt: string | null;
   minutes: number;
+  prep_minutes: number | null;
   difficulty: Difficulty;
   temperature: Temperature;
   servings: number;
   cup_size: string;
   tags: string[] | null;
+  category: string | null;
+  featured: boolean | null;
+  sweetness: number | null;
+  strength: number | null;
+  caffeine_mg: number | null;
+  calories: number | null;
   recipe_ingredients: RecipeIngredientRow[] | null;
   recipe_equipment: RecipeEquipmentRow[] | null;
   recipe_steps: RecipeStepRow[] | null;
+  published_recipe_collections: RecipeCollectionRow[] | null;
 };
 
 function byPosition<T extends { position: number }>(left: T, right: T) {
@@ -71,6 +84,10 @@ export function mapRecipeRow(row: RecipeRow): Recipe {
     ...(step.timer_seconds == null ? {} : { timerSeconds: step.timer_seconds }),
   }));
 
+  const collections = (row.published_recipe_collections ?? []).flatMap((entry) =>
+    entry.recipe_collections ? [entry.recipe_collections.title] : [],
+  );
+
   return {
     id: row.id,
     slug: row.slug,
@@ -88,5 +105,14 @@ export function mapRecipeRow(row: RecipeRow): Recipe {
     ingredients,
     equipment,
     steps,
+    category: row.category ?? 'coffee',
+    collections,
+    prepMinutes: row.prep_minutes ?? row.minutes,
+    featured: row.featured ?? false,
+    imageAlt: row.image_alt ?? row.name,
+    sweetness: row.sweetness ?? null,
+    strength: row.strength ?? null,
+    caffeineMg: row.caffeine_mg ?? null,
+    calories: row.calories ?? null,
   };
 }

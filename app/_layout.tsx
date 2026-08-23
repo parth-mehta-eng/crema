@@ -34,5 +34,5 @@ export default function RootLayout(){
   void Promise.all([setFavoriteSession(userId),setInventorySession(userId)]);
  },[authInitialized,setFavoriteSession,setInventorySession,userId]);
  if(!interLoaded||!cormLoaded) return null;
- return <SafeAreaProvider><StatusBar style="dark"/><Stack screenOptions={{headerShown:false,contentStyle:{backgroundColor:colors.background}}}><Stack.Screen name="(tabs)"/><Stack.Screen name="recipe/[id]" options={{presentation:'card'}}/><Stack.Screen name="brew/[id]" options={{presentation:'card'}}/><Stack.Screen name="admin/index"/><Stack.Screen name="admin/draft/[id]"/></Stack></SafeAreaProvider>;
+ return <SafeAreaProvider><StatusBar style="dark"/><Stack screenOptions={{headerShown:false,contentStyle:{backgroundColor:colors.background}}}><Stack.Screen name="(tabs)"/><Stack.Screen name="recipe/[id]" options={{presentation:'card'}}/><Stack.Screen name="brew/[id]" options={{presentation:'card'}}/><Stack.Screen name="collection/index" options={{presentation:'card'}}/><Stack.Screen name="collection/[id]" options={{presentation:'card'}}/><Stack.Screen name="admin/index"/><Stack.Screen name="admin/draft/[id]"/></Stack></SafeAreaProvider>;
 }

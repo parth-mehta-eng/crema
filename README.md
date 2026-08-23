@@ -17,6 +17,8 @@ A polished but intentionally casual iOS/Android coffee recipe app starter.
 - Initial SQL migration
 - Private Coffee Discovery admin workflow
 - Structured Recipe Authoring and transactional publishing workflow
+- An initial ~48-draft coffee library with content-quality tracking, a Quality dashboard, and a Review Queue (see [docs/CONTENT_LIBRARY.md](docs/CONTENT_LIBRARY.md) and [docs/CONTENT_QUALITY.md](docs/CONTENT_QUALITY.md))
+- Curated mobile collections, a deterministic non-AI Daily Brew, and expanded search/filtering (see [docs/WEEKEND_6.md](docs/WEEKEND_6.md))
 - EAS build configuration
 - GitHub Actions validation
 

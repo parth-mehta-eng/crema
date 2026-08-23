@@ -53,13 +53,19 @@ export default function RecipeDetail() {
   return (
     <Screen>
       <View style={styles.heroWrap}>
-        <Image
-          accessibilityLabel={recipe.name}
-          source={recipe.image}
-          style={[styles.hero, { height: heroHeight }]}
-          contentFit="cover"
-          transition={200}
-        />
+        {recipe.image === 'crema://placeholder' ? (
+          <View style={[styles.hero, styles.heroPlaceholder, { height: heroHeight }]}>
+            <Ionicons name="cafe-outline" size={48} color={colors.textMuted} />
+          </View>
+        ) : (
+          <Image
+            accessibilityLabel={recipe.imageAlt || recipe.name}
+            source={recipe.image}
+            style={[styles.hero, { height: heroHeight }]}
+            contentFit="cover"
+            transition={200}
+          />
+        )}
         <Pressable
           accessibilityLabel="Go back"
           accessibilityRole="button"
@@ -98,7 +104,19 @@ export default function RecipeDetail() {
           <MetadataItem icon="speedometer-outline" label="Difficulty" value={recipe.difficulty} />
           <MetadataItem icon="people-outline" label="Servings" value={`${recipe.servings * multiplier}`} />
           <MetadataItem icon="cafe-outline" label="Cup size" value={recipe.cupSize} />
+          <MetadataItem icon="thermometer-outline" label="Temperature" value={recipe.temperature} />
+          <MetadataItem icon="pricetag-outline" label="Style" value={recipe.category} />
         </View>
+        {(recipe.caffeineMg != null || recipe.calories != null) && (
+          <AppText style={styles.estimateNote}>
+            {[
+              recipe.caffeineMg != null ? `~${recipe.caffeineMg} mg caffeine (estimate)` : null,
+              recipe.calories != null ? `~${recipe.calories} cal (estimate)` : null,
+            ]
+              .filter(Boolean)
+              .join('  •  ')}
+          </AppText>
+        )}
 
         <View style={styles.sectionHeadingRow}>
           <View style={styles.sectionHeadingCopy}>
@@ -180,6 +198,15 @@ const styles = StyleSheet.create({
   hero: {
     width: '100%',
     backgroundColor: colors.border,
+  },
+  heroPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  estimateNote: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    color: colors.textMuted,
   },
   floating: {
     position: 'absolute',

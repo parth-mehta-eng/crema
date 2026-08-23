@@ -8,11 +8,12 @@ import { filterRecipes, type RecipeFilter } from './search';
 
 const RECIPE_CACHE_KEY = 'crema-recipe-cache-v1';
 const recipeSelect = `
-  id, slug, name, subtitle, inspiration, description, image_url, minutes,
-  difficulty, temperature, servings, cup_size, tags,
+  id, slug, name, subtitle, inspiration, description, image_url, image_alt, minutes, prep_minutes,
+  difficulty, temperature, servings, cup_size, tags, category, featured, sweetness, strength, caffeine_mg, calories,
   recipe_ingredients(position, quantity, unit, note, optional, display_name, ingredients(id, name)),
   recipe_equipment(position, equipment(id, name)),
-  recipe_steps(position, instruction, timer_seconds)
+  recipe_steps(position, instruction, timer_seconds),
+  published_recipe_collections(recipe_collections(title))
 `;
 
 export type RecipeDataResult = {

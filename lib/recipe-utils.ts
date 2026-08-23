@@ -46,15 +46,16 @@ export function getRecipeMatch(
   const requiredEquipment = recipe.equipment;
   const ownedEquipment = requiredEquipment.filter((equipmentId) => equipmentInventory.includes(equipmentId));
   const missingEquipment = requiredEquipment.filter((equipmentId) => !equipmentInventory.includes(equipmentId));
-  const missingTotal = missingIngredients.length + missingEquipment.length;
   const classification: MatchClassification =
-    missingTotal === 0
-      ? 'Perfect Match'
-      : missingTotal === 1
-        ? 'Missing 1'
-        : missingTotal === 2
-          ? 'Missing 2'
-          : 'Missing 3+';
+    missingEquipment.length > 0
+      ? 'Equipment Missing'
+      : missingIngredients.length === 0
+        ? 'Perfect Match'
+        : missingIngredients.length === 1
+          ? 'Missing 1'
+          : missingIngredients.length === 2
+            ? 'Missing 2'
+            : 'Missing 3+';
 
   return {
     requiredIngredients,

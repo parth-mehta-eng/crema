@@ -1,28 +1,92 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Link, router } from 'expo-router';
 import { AppText, DisplayText } from '@/components/AppText';
+import { DailyBrewCard } from '@/components/DailyBrewCard';
 import { Screen } from '@/components/Screen';
 import { SearchBar } from '@/components/SearchBar';
 import { CategoryChip } from '@/components/CategoryChip';
 import { RecipeCard } from '@/components/RecipeCard';
 import { colors, font, radius, spacing } from '@/constants/theme';
+import { getRecipeMatch } from '@/lib/recipe-utils';
+import { CURATED_COLLECTIONS, HOME_COLLECTION_TITLES } from '@/services/collections';
+import { getDailyBrew } from '@/services/dailyBrew';
+import { useCoffeeBarStore } from '@/store/useCoffeeBarStore';
 import { useRecipesStore } from '@/store/useRecipesStore';
 import type { Recipe } from '@/types/recipe';
 
 const categories = ['Iced', 'Hot', 'Espresso', 'Sweet', 'Surprise Me'] as const;
+const MAX_CARDS_PER_SECTION = 6;
+
+type HomeSection = {
+  key: string;
+  title: string;
+  recipes: Recipe[];
+};
+
 export default function Home() {
   const { width } = useWindowDimensions();
   const recipes = useRecipesStore((state) => state.recipes);
-  const featuredRecipes = recipes.slice(0, 3);
-  const popularRecipes = recipes.slice(1);
+  const ingredientInventory = useCoffeeBarStore((state) => state.ingredients);
+  const equipmentInventory = useCoffeeBarStore((state) => state.equipment);
+  const [dailyBrew, setDailyBrew] = useState<Recipe | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getDailyBrew().then((result) => {
+      if (active) setDailyBrew(result.recipe);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const isSmallScreen = width < 360;
   const featuredCardWidth = Math.min(320, Math.max(232, Math.round((width - spacing.xl - spacing.lg) / 1.2)));
   const featuredImageHeight = Math.min(208, Math.max(180, Math.round(featuredCardWidth * 0.67)));
   const compactImageWidth = isSmallScreen ? 104 : 112;
 
-  const renderFeaturedRecipe = useCallback(
+  const coffeeBarRecipes = useMemo(() => {
+    const withMatch = recipes.map((recipe) => ({
+      recipe,
+      match: getRecipeMatch(recipe, ingredientInventory, equipmentInventory),
+    }));
+    const rank: Record<string, number> = {
+      'Perfect Match': 0,
+      'Missing 1': 1,
+      'Missing 2': 2,
+      'Missing 3+': 3,
+      'Equipment Missing': 4,
+    };
+    return withMatch
+      .sort((a, b) => (rank[a.match.classification] ?? 0) - (rank[b.match.classification] ?? 0))
+      .slice(0, MAX_CARDS_PER_SECTION)
+      .map(({ recipe }) => recipe);
+  }, [equipmentInventory, ingredientInventory, recipes]);
+
+  const collectionSections = useMemo<HomeSection[]>(() => {
+    return HOME_COLLECTION_TITLES.flatMap((title) => {
+      const collection = CURATED_COLLECTIONS.find((entry) => entry.title === title);
+      if (!collection) return [];
+      const matchingRecipes = recipes.filter((recipe) => recipe.collections.includes(title));
+      if (matchingRecipes.length === 0) return [];
+      return [
+        {
+          key: collection.id,
+          title,
+          recipes: matchingRecipes.slice(0, MAX_CARDS_PER_SECTION),
+        },
+      ];
+    });
+  }, [recipes]);
+
+  const quickAndEasy = useMemo(
+    () => recipes.filter((recipe) => recipe.prepMinutes <= 5 || recipe.difficulty === 'Easy').slice(0, MAX_CARDS_PER_SECTION),
+    [recipes],
+  );
+
+  const renderRecipeCard = useCallback(
     ({ item }: { item: Recipe }) => (
       <RecipeCard recipe={item} width={featuredCardWidth} imageHeight={featuredImageHeight} />
     ),
@@ -68,7 +132,13 @@ export default function Home() {
         ))}
       </ScrollView>
 
-      <View style={styles.section}>
+      {dailyBrew ? (
+        <View style={styles.section}>
+          <DailyBrewCard recipe={dailyBrew} />
+        </View>
+      ) : null}
+
+      <View style={[styles.section, styles.firstListSection]}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionCopy}>
             <DisplayText style={[styles.heading, isSmallScreen && styles.headingSmall]}>
@@ -89,43 +159,66 @@ export default function Home() {
 
         <FlatList
           horizontal
-          data={featuredRecipes}
+          data={coffeeBarRecipes}
           decelerationRate="fast"
           keyExtractor={(recipe) => recipe.id}
-          renderItem={renderFeaturedRecipe}
+          renderItem={renderRecipeCard}
           showsHorizontalScrollIndicator={false}
           style={styles.featuredCarousel}
           contentContainerStyle={styles.featuredList}
         />
       </View>
 
-      <View style={[styles.section, styles.popularSection]}>
-        <View style={styles.sectionHeader}>
-          <DisplayText style={[styles.heading, isSmallScreen && styles.headingSmall]}>
-            Popular right now
-          </DisplayText>
-          <Link href="/search" asChild>
-            <Pressable
-              accessibilityRole="button"
-              hitSlop={4}
-              style={({ pressed }) => [styles.seeAll, pressed && styles.controlPressed]}
-            >
-              <AppText style={styles.seeAllText}>See all</AppText>
-            </Pressable>
-          </Link>
-        </View>
+      {collectionSections.map((section) => (
+        <View key={section.key} style={[styles.section, styles.listSection]}>
+          <View style={styles.sectionHeader}>
+            <DisplayText style={[styles.heading, isSmallScreen && styles.headingSmall]}>{section.title}</DisplayText>
+            <Link href={{ pathname: '/collection/[id]', params: { id: section.key } }} asChild>
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={4}
+                style={({ pressed }) => [styles.seeAll, pressed && styles.controlPressed]}
+              >
+                <AppText style={styles.seeAllText}>See all</AppText>
+              </Pressable>
+            </Link>
+          </View>
 
-        <View style={styles.popularList}>
-          {popularRecipes.map((recipe) => (
-            <RecipeCard
-              key={recipe.id}
-              recipe={recipe}
-              compact
-              compactImageWidth={compactImageWidth}
-            />
-          ))}
+          <FlatList
+            horizontal
+            data={section.recipes}
+            decelerationRate="fast"
+            keyExtractor={(recipe) => recipe.id}
+            renderItem={renderRecipeCard}
+            showsHorizontalScrollIndicator={false}
+            style={styles.featuredCarousel}
+            contentContainerStyle={styles.featuredList}
+          />
         </View>
-      </View>
+      ))}
+
+      {quickAndEasy.length > 0 ? (
+        <View style={[styles.section, styles.popularSection]}>
+          <View style={styles.sectionHeader}>
+            <DisplayText style={[styles.heading, isSmallScreen && styles.headingSmall]}>Quick & Easy</DisplayText>
+            <Link href={{ pathname: '/search', params: { filter: 'Quick' } }} asChild>
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={4}
+                style={({ pressed }) => [styles.seeAll, pressed && styles.controlPressed]}
+              >
+                <AppText style={styles.seeAllText}>See all</AppText>
+              </Pressable>
+            </Link>
+          </View>
+
+          <View style={styles.popularList}>
+            {quickAndEasy.map((recipe) => (
+              <RecipeCard key={recipe.id} recipe={recipe} compact compactImageWidth={compactImageWidth} />
+            ))}
+          </View>
+        </View>
+      ) : null}
     </Screen>
   );
 }
@@ -179,6 +272,12 @@ const styles = StyleSheet.create({
   },
   section: {
     paddingHorizontal: spacing.xl,
+  },
+  firstListSection: {
+    marginTop: spacing.lg,
+  },
+  listSection: {
+    marginTop: spacing.lg,
   },
   sectionHeader: {
     minHeight: 48,

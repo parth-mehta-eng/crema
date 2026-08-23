@@ -7,17 +7,61 @@ import { LoadingState } from '@/components/LoadingState';
 import { Screen } from '@/components/Screen';
 import { colors, font, radius, spacing } from '@/constants/theme';
 import {
+  bulkArchiveDrafts,
+  bulkAssignCollection,
+  bulkAssignSource,
+  bulkMarkAttributionComplete,
+  bulkSetNeedsTesting,
+  draftsToCsv,
+  draftsToJson,
+  exportDraftsForBackup,
   getAdminAccess,
   loadAdminDashboard,
+  markDraftsReviewed,
   runAdminAction,
   signInAdmin,
   signOutAdmin,
   type AdminAction,
   type AdminDashboardData,
+  type AdminRecipeDraft,
 } from '@/services/admin';
+import { supabase } from '@/lib/supabase';
 
-type AdminSection = 'Sources' | 'Imports' | 'Discovered' | 'Drafts' | 'Ingredients' | 'Collections';
-const sections: AdminSection[] = ['Sources', 'Imports', 'Discovered', 'Drafts', 'Ingredients', 'Collections'];
+type AdminSection = 'Sources' | 'Imports' | 'Discovered' | 'Drafts' | 'Quality' | 'Review Queue' | 'Ingredients' | 'Collections';
+const sections: AdminSection[] = ['Sources', 'Imports', 'Discovered', 'Drafts', 'Quality', 'Review Queue', 'Ingredients', 'Collections'];
+
+function draftMissingRequirements(draft: AdminRecipeDraft): string[] {
+  const missing: string[] = [];
+  if (!draft.proposed_title) missing.push('title');
+  if (!draft.slug) missing.push('slug');
+  if (!draft.description) missing.push('description');
+  if (!draft.difficulty) missing.push('difficulty');
+  if (!draft.prep_minutes) missing.push('prep time');
+  if (!draft.servings) missing.push('servings');
+  if (!draft.recipe_draft_ingredients?.length) missing.push('ingredients');
+  if (!draft.recipe_draft_steps?.length) missing.push('steps');
+  if (!draft.recipe_draft_equipment?.length) missing.push('equipment');
+  if (draft.image_status === 'missing') missing.push('image');
+  if (draft.attribution_status === 'required' || draft.attribution_status === 'incomplete') missing.push('attribution');
+  if (draft.needs_testing || !draft.tested) missing.push('testing');
+  return missing;
+}
+
+/** Higher score = higher review priority, per docs/WEEKEND_6.md review-queue ordering. */
+function reviewPriorityScore(draft: AdminRecipeDraft): number {
+  const isCafeInspired = /inspired/i.test(draft.inspiration_label);
+  const isEspressoClassic = draft.category === 'classic';
+  const isSeasonal = draft.category === 'seasonal';
+  const missing = draftMissingRequirements(draft);
+  const hasCompleteIngredients = !missing.includes('ingredients') && !missing.includes('steps');
+
+  if (isCafeInspired) return 100;
+  if (isEspressoClassic) return 90;
+  if (hasCompleteIngredients && (draft.needs_testing || !draft.tested)) return 80;
+  if (missing.length === 1) return 70;
+  if (isSeasonal) return 60;
+  return 10;
+}
 const ingredientCategories = ['coffee', 'espresso', 'milk', 'syrup', 'sauce', 'sweetener', 'spice', 'topping', 'pantry', 'tea', 'matcha', 'other'];
 const ingredientUnits = ['shot', 'oz', 'fl oz', 'cup', 'tbsp', 'tsp', 'mL', 'g', 'pinch', 'pump', 'piece', 'to taste'];
 
@@ -104,8 +148,17 @@ export default function AdminDashboard() {
   const [draftFilter, setDraftFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [collectionFilter, setCollectionFilter] = useState('all');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(new Set());
+  const [bulkCollectionId, setBulkCollectionId] = useState('');
+  const [bulkSourceName, setBulkSourceName] = useState('');
+  const [bulkSourceUrl, setBulkSourceUrl] = useState('');
+  const [bulkPending, setBulkPending] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<'json' | 'csv'>('json');
+  const [exportText, setExportText] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -144,10 +197,81 @@ export default function AdminDashboard() {
       const matchesStatus = draftFilter === 'all'
         || (draftFilter === 'incomplete' && draft.status === 'draft')
         || (draftFilter === 'needs testing' && draft.needs_testing)
+        || (draftFilter === 'missing image' && draft.image_status === 'missing')
+        || (draftFilter === 'invalid' && draft.validation_status === 'invalid')
+        || (draftFilter === 'ready for review' && draft.validation_status === 'valid' && draft.status !== 'published' && draft.status !== 'archived')
         || draft.status === draftFilter;
-      return matchesText && matchesStatus && (sourceFilter === 'all' || draft.source_name === sourceFilter) && (categoryFilter === 'all' || draft.category === categoryFilter);
+      const matchesCollection = collectionFilter === 'all'
+        || draft.recipe_draft_collections?.some((entry) => entry.collection_id === collectionFilter);
+      return matchesText && matchesStatus && matchesCollection && (sourceFilter === 'all' || draft.source_name === sourceFilter) && (categoryFilter === 'all' || draft.category === categoryFilter);
     }) ?? [];
-  }, [categoryFilter, data, draftFilter, draftSearch, sourceFilter]);
+  }, [categoryFilter, collectionFilter, data, draftFilter, draftSearch, sourceFilter]);
+
+  const qualityStats = useMemo(() => {
+    const drafts = data?.drafts ?? [];
+    const bySource = new Map<string, number>();
+    const byCollection = new Map<string, number>();
+    for (const draft of drafts) {
+      bySource.set(draft.source_name || 'Unspecified', (bySource.get(draft.source_name || 'Unspecified') ?? 0) + 1);
+      for (const entry of draft.recipe_draft_collections ?? []) {
+        const title = entry.recipe_collections?.title ?? entry.collection_id;
+        byCollection.set(title, (byCollection.get(title) ?? 0) + 1);
+      }
+    }
+    return {
+      totalDiscovered: data?.drinks.length ?? 0,
+      totalDrafts: drafts.length,
+      missingImages: drafts.filter((d) => d.image_status === 'missing').length,
+      needsTesting: drafts.filter((d) => d.needs_testing).length,
+      missingIngredients: drafts.filter((d) => !d.recipe_draft_ingredients?.length).length,
+      missingSteps: drafts.filter((d) => !d.recipe_draft_steps?.length).length,
+      readyForReview: drafts.filter((d) => d.validation_status === 'valid' && d.status !== 'published' && d.status !== 'archived').length,
+      published: drafts.filter((d) => d.status === 'published').length,
+      bySource: [...bySource.entries()].sort((a, b) => b[1] - a[1]),
+      byCollection: [...byCollection.entries()].sort((a, b) => b[1] - a[1]),
+    };
+  }, [data]);
+
+  const reviewQueue = useMemo(() => {
+    const drafts = data?.drafts.filter((d) => d.status !== 'published' && d.status !== 'archived') ?? [];
+    return [...drafts].sort((a, b) => reviewPriorityScore(b) - reviewPriorityScore(a));
+  }, [data]);
+
+  const toggleDraftSelection = (draftId: string) => {
+    setSelectedDraftIds((current) => {
+      const next = new Set(current);
+      if (next.has(draftId)) next.delete(draftId);
+      else next.add(draftId);
+      return next;
+    });
+  };
+
+  const runBulk = async (message: string, fn: () => Promise<void>) => {
+    setBulkPending(true);
+    setBulkMessage(null);
+    try {
+      await fn();
+      setBulkMessage(message);
+      setSelectedDraftIds(new Set());
+      await refresh();
+    } catch (caught) {
+      setBulkMessage(caught instanceof Error ? caught.message : 'The bulk action failed.');
+    } finally {
+      setBulkPending(false);
+    }
+  };
+
+  const runExport = async () => {
+    setBulkPending(true);
+    try {
+      const rows = await exportDraftsForBackup([...selectedDraftIds]);
+      setExportText(exportFormat === 'json' ? draftsToJson(rows) : draftsToCsv(rows));
+    } catch (caught) {
+      setBulkMessage(caught instanceof Error ? caught.message : 'Export failed.');
+    } finally {
+      setBulkPending(false);
+    }
+  };
 
   const act = async (key: string, action: AdminAction) => {
     setPending(key);
@@ -386,7 +510,7 @@ export default function AdminDashboard() {
           <View style={styles.draftTools}>
             <TextInput accessibilityLabel="Search recipe drafts" placeholder="Search title, source, flavors, ingredients" value={draftSearch} onChangeText={setDraftSearch} style={styles.input} />
             <View style={styles.filterRow}>
-              {['all', 'incomplete', 'needs testing', 'ready', 'published', 'archived'].map((filter) => <ActionButton key={filter} label={filter} secondary={draftFilter !== filter} onPress={() => setDraftFilter(filter)} />)}
+              {['all', 'incomplete', 'needs testing', 'missing image', 'invalid', 'ready for review', 'ready', 'published', 'archived'].map((filter) => <ActionButton key={filter} label={filter} secondary={draftFilter !== filter} onPress={() => setDraftFilter(filter)} />)}
             </View>
             <View style={styles.filterRow}>
               {['all', ...new Set(data.drafts.map((draft) => draft.source_name).filter(Boolean))].map((source) => <ActionButton key={source} label={source} secondary={sourceFilter !== source} onPress={() => setSourceFilter(source)} />)}
@@ -394,15 +518,105 @@ export default function AdminDashboard() {
             <View style={styles.filterRow}>
               {['all', ...new Set(data.drafts.map((draft) => draft.category))].map((category) => <ActionButton key={category} label={category} secondary={categoryFilter !== category} onPress={() => setCategoryFilter(category)} />)}
             </View>
+            <View style={styles.filterRow}>
+              {[{ id: 'all', title: 'all collections' }, ...data.collections].map((collection) => <ActionButton key={collection.id} label={collection.title} secondary={collectionFilter !== collection.id} onPress={() => setCollectionFilter(collection.id)} />)}
+            </View>
+          </View>
+        ) : null}
+
+        {section === 'Drafts' && selectedDraftIds.size > 0 ? (
+          <View style={styles.draftTools}>
+            <DisplayText style={styles.cardTitle}>{selectedDraftIds.size} selected</DisplayText>
+            <AppText style={styles.meta}>Bulk actions never publish — publishing stays a single-recipe action on each draft.</AppText>
+            {bulkMessage ? <AppText style={styles.meta}>{bulkMessage}</AppText> : null}
+
+            <AppText style={styles.inputLabel}>Assign collection</AppText>
+            <View style={styles.filterRow}>
+              {data.collections.map((collection) => (
+                <ActionButton
+                  key={collection.id}
+                  label={collection.title}
+                  secondary={bulkCollectionId !== collection.id}
+                  onPress={() => setBulkCollectionId(collection.id)}
+                />
+              ))}
+            </View>
+            <ActionButton
+              label="Apply collection"
+              disabled={bulkPending || !bulkCollectionId}
+              onPress={() => void runBulk('Collection assigned.', () => bulkAssignCollection([...selectedDraftIds], bulkCollectionId))}
+            />
+
+            <AppText style={styles.inputLabel}>Assign source</AppText>
+            <View style={styles.twoColumn}>
+              <View style={styles.grow}><TextInput placeholder="Source name" value={bulkSourceName} onChangeText={setBulkSourceName} style={styles.input} /></View>
+              <View style={styles.grow}><TextInput placeholder="https://source-url" value={bulkSourceUrl} onChangeText={setBulkSourceUrl} style={styles.input} /></View>
+            </View>
+            <ActionButton
+              label="Apply source"
+              disabled={bulkPending || !bulkSourceName.trim()}
+              onPress={() => void runBulk('Source assigned.', () => bulkAssignSource([...selectedDraftIds], bulkSourceName.trim(), bulkSourceUrl.trim() || null))}
+            />
+
+            <View style={styles.actions}>
+              <ActionButton label="Set needs testing" secondary disabled={bulkPending} onPress={() => void runBulk('Marked as needing testing.', () => bulkSetNeedsTesting([...selectedDraftIds], true))} />
+              <ActionButton label="Clear needs testing" secondary disabled={bulkPending} onPress={() => void runBulk('Cleared needs-testing flag.', () => bulkSetNeedsTesting([...selectedDraftIds], false))} />
+              <ActionButton label="Mark attribution complete" secondary disabled={bulkPending} onPress={() => void runBulk('Attribution marked complete.', () => bulkMarkAttributionComplete([...selectedDraftIds]))} />
+              <ActionButton
+                label="Mark reviewed"
+                secondary
+                disabled={bulkPending}
+                onPress={() => void runBulk('Marked reviewed.', async () => {
+                  const userId = (await supabase?.auth.getUser())?.data.user?.id;
+                  if (!userId) throw new Error('Sign in again to record the reviewer.');
+                  await markDraftsReviewed([...selectedDraftIds], userId);
+                })}
+              />
+              <ActionButton
+                label="Archive selected"
+                secondary
+                disabled={bulkPending}
+                onPress={() => Alert.alert('Archive selected drafts?', `${selectedDraftIds.size} draft(s) will be archived. This is reversible.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Archive', style: 'destructive', onPress: () => void runBulk('Selected drafts archived.', () => bulkArchiveDrafts([...selectedDraftIds])) }])}
+              />
+            </View>
+
+            <AppText style={styles.inputLabel}>Export selected</AppText>
+            <View style={styles.filterRow}>
+              <ActionButton label="JSON" secondary={exportFormat !== 'json'} onPress={() => setExportFormat('json')} />
+              <ActionButton label="CSV" secondary={exportFormat !== 'csv'} onPress={() => setExportFormat('csv')} />
+              <ActionButton label="Generate export" disabled={bulkPending} onPress={() => void runExport()} />
+            </View>
+            {exportText ? (
+              <TextInput
+                accessibilityLabel="Export output — select and copy"
+                multiline
+                editable={false}
+                value={exportText}
+                style={[styles.input, styles.multiline, styles.exportOutput]}
+              />
+            ) : null}
+
+            <ActionButton label="Clear selection" secondary onPress={() => { setSelectedDraftIds(new Set()); setExportText(null); }} />
           </View>
         ) : null}
 
         {section === 'Drafts' ? visibleDrafts.map((draft) => {
           const draftPending = pending === `draft-${draft.id}`;
           const validationReady = Boolean(draft.proposed_title && draft.slug && draft.description && draft.difficulty && draft.prep_minutes && draft.servings && (draft.hero_image_url || draft.placeholder_approved) && draft.recipe_draft_ingredients?.length && draft.recipe_draft_steps?.length && draft.recipe_draft_equipment?.length && draft.tested && !draft.needs_testing);
+          const selected = selectedDraftIds.has(draft.id);
           return (
             <View key={draft.id} style={styles.card}>
               <View style={styles.cardHeading}>
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: selected }}
+                  accessibilityLabel={`Select ${draft.proposed_title} for bulk actions`}
+                  hitSlop={8}
+                  onPress={() => toggleDraftSelection(draft.id)}
+                  style={[styles.checkbox, selected && styles.checkboxChecked]}
+                >
+                  {selected ? <Ionicons name="checkmark" size={14} color={colors.white} /> : null}
+                </Pressable>
                 <View style={styles.grow}>
                   <DisplayText style={styles.cardTitle}>{draft.proposed_title}</DisplayText>
                   <AppText style={styles.meta}>{draft.source_name} · {draft.category} · {draft.temperature}</AppText>
@@ -413,6 +627,11 @@ export default function AdminDashboard() {
                 {draft.needs_testing ? 'Needs testing' : 'Testing recorded'}
               </AppText>
               <AppText style={validationReady ? styles.success : styles.warning}>{validationReady ? 'Validation-ready' : 'Incomplete'}</AppText>
+              <View style={styles.filterRow}>
+                <StatusPill status={`image: ${draft.image_status}`} />
+                <StatusPill status={`attribution: ${draft.attribution_status}`} />
+                <StatusPill status={`validation: ${draft.validation_status}`} />
+              </View>
               <AppText style={styles.meta}>Updated {formatDate(draft.updated_at)} · {draft.recipe_draft_collections?.map((item) => item.recipe_collections?.title).filter(Boolean).join(', ') || 'No collection'} · {draft.published_recipe_id ? 'Linked to public recipe' : 'Not published'}</AppText>
                 <View style={styles.actions}>
                   <ActionButton label="Edit" secondary onPress={() => router.push({ pathname: '/admin/draft/[id]', params: { id: draft.id } })} />
@@ -443,6 +662,70 @@ export default function AdminDashboard() {
           );
         }) : null}
 
+        {section === 'Quality' ? (
+          <View>
+            <View style={styles.statGrid}>
+              {[
+                ['Discovered drinks', qualityStats.totalDiscovered],
+                ['Total drafts', qualityStats.totalDrafts],
+                ['Missing images', qualityStats.missingImages],
+                ['Needs testing', qualityStats.needsTesting],
+                ['Missing ingredients', qualityStats.missingIngredients],
+                ['Missing steps', qualityStats.missingSteps],
+                ['Ready for review', qualityStats.readyForReview],
+                ['Published recipes', qualityStats.published],
+              ].map(([label, value]) => (
+                <View key={label as string} style={styles.statTile}>
+                  <DisplayText style={styles.statValue}>{value}</DisplayText>
+                  <AppText style={styles.statLabel}>{label}</AppText>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.card}>
+              <DisplayText style={styles.cardTitle}>Drafts by source</DisplayText>
+              {qualityStats.bySource.map(([source, count]) => (
+                <AppText key={source} style={styles.counts}>{source}: {count}</AppText>
+              ))}
+            </View>
+            <View style={styles.card}>
+              <DisplayText style={styles.cardTitle}>Drafts by collection</DisplayText>
+              {qualityStats.byCollection.length === 0 ? <AppText style={styles.meta}>No collection assignments yet.</AppText> : null}
+              {qualityStats.byCollection.map(([collection, count]) => (
+                <AppText key={collection} style={styles.counts}>{collection}: {count}</AppText>
+              ))}
+            </View>
+            <AppText style={styles.meta}>Use the Drafts tab filters (source, collection, status, needs testing, missing image, invalid, ready) to drill into any of these counts.</AppText>
+          </View>
+        ) : null}
+
+        {section === 'Review Queue' ? reviewQueue.map((draft, index) => {
+          const missing = draftMissingRequirements(draft);
+          return (
+            <View key={draft.id} style={styles.card}>
+              <View style={styles.cardHeading}>
+                <View style={styles.grow}>
+                  <DisplayText style={styles.cardTitle}>{index + 1}. {draft.proposed_title}</DisplayText>
+                  <AppText style={styles.meta}>{draft.source_name || 'No source'} · {draft.recipe_draft_collections?.map((item) => item.recipe_collections?.title).filter(Boolean).join(', ') || 'No collection'}</AppText>
+                </View>
+                <StatusPill status={draft.status} />
+              </View>
+              <AppText style={missing.length ? styles.warning : styles.success}>
+                {missing.length ? `Missing: ${missing.join(', ')}` : 'Meets all publish requirements'}
+              </AppText>
+              <View style={styles.filterRow}>
+                <StatusPill status={`test: ${draft.tested ? 'tested' : 'untested'}`} />
+                <StatusPill status={`image: ${draft.image_status}`} />
+                <StatusPill status={`validation: ${draft.validation_status}`} />
+              </View>
+              <View style={styles.actions}>
+                <ActionButton label="Edit" secondary onPress={() => router.push({ pathname: '/admin/draft/[id]', params: { id: draft.id } })} />
+                <ActionButton label="Preview" secondary onPress={() => router.push({ pathname: '/admin/draft/[id]', params: { id: draft.id, preview: '1' } })} />
+              </View>
+            </View>
+          );
+        }) : null}
+
         {section === 'Ingredients' ? <View style={styles.card}><DisplayText style={styles.cardTitle}>New ingredient</DisplayText><AppText style={styles.meta}>Canonical IDs prevent duplicate ingredients. Referenced items are deactivated rather than deleted.</AppText><IngredientCatalogEditor busy={pending === 'new-ingredient'} onSave={(action) => void act('new-ingredient', action)} /></View> : null}
         {section === 'Ingredients' ? data.ingredients.map((item) => <View key={item.id} style={styles.card}><View style={styles.cardHeading}><DisplayText style={styles.cardTitle}>{item.name}</DisplayText><StatusPill status={item.active ? 'active' : 'inactive'} /></View><IngredientCatalogEditor item={item} busy={pending === `ingredient-${item.id}`} onSave={(action) => void act(`ingredient-${item.id}`, action)} /></View>) : null}
 
@@ -453,6 +736,7 @@ export default function AdminDashboard() {
         {section === 'Imports' && data.runs.length === 0 ? <AppText style={styles.empty}>No imports have run.</AppText> : null}
         {section === 'Discovered' && data.drinks.length === 0 ? <AppText style={styles.empty}>No drinks discovered.</AppText> : null}
         {section === 'Drafts' && visibleDrafts.length === 0 ? <AppText style={styles.empty}>No recipe drafts match these filters.</AppText> : null}
+        {section === 'Review Queue' && reviewQueue.length === 0 ? <AppText style={styles.empty}>Nothing left in the review queue — every draft is published or archived.</AppText> : null}
       </View>
     </Screen>
   );
@@ -505,4 +789,11 @@ const styles = StyleSheet.create({
   input: { minHeight: 48, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, backgroundColor: colors.background, fontFamily: font.body, color: colors.text },
   multiline: { minHeight: 88, paddingVertical: spacing.md, textAlignVertical: 'top' },
   empty: { paddingVertical: spacing.xxl, textAlign: 'center', color: colors.textSecondary },
+  checkbox: { width: 24, height: 24, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 6, backgroundColor: colors.background },
+  checkboxChecked: { borderColor: colors.espresso, backgroundColor: colors.espresso },
+  statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg },
+  statTile: { minWidth: 140, flexGrow: 1, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, borderRadius: radius.card, backgroundColor: colors.surface },
+  statValue: { fontSize: 32, lineHeight: 35 },
+  statLabel: { marginTop: spacing.xs, fontSize: 12, color: colors.textSecondary },
+  exportOutput: { marginTop: spacing.sm, minHeight: 160, fontSize: 11, fontFamily: 'Inter_400Regular' },
 });

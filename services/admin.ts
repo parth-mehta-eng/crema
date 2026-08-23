@@ -43,6 +43,10 @@ export type AdminDiscoveredDrink = {
   coffee_sources: { name: string } | null;
 };
 
+export type ImageStatus = 'missing' | 'placeholder' | 'approved';
+export type AttributionStatus = 'not_required' | 'required' | 'complete' | 'incomplete';
+export type ValidationStatus = 'incomplete' | 'valid' | 'invalid';
+
 export type AdminRecipeDraft = {
   id: string;
   discovered_drink_id: string | null;
@@ -68,10 +72,15 @@ export type AdminRecipeDraft = {
   servings: number | null;
   hero_image_url: string | null;
   placeholder_approved: boolean;
+  image_status: ImageStatus;
+  attribution_status: AttributionStatus;
+  validation_status: ValidationStatus;
+  content_notes: string | null;
+  last_reviewed_at: string | null;
   recipe_draft_ingredients?: Array<{ id: string }>;
-  recipe_draft_steps?: Array<{ id: string }>;
+  recipe_draft_steps?: Array<{ id: string; instruction: string }>;
   recipe_draft_equipment?: Array<{ equipment_id: string }>;
-  recipe_draft_collections?: Array<{ recipe_collections: { title: string } | null }>;
+  recipe_draft_collections?: Array<{ collection_id: string; recipe_collections: { title: string } | null }>;
   created_at: string;
 };
 
@@ -148,7 +157,13 @@ export async function loadAdminDashboard(): Promise<AdminDashboardData> {
     client.from('coffee_sources').select('*').order('name'),
     client.from('menu_import_runs').select('*, coffee_sources(name)').order('started_at', { ascending: false }).limit(50),
     client.from('discovered_drinks').select('*, coffee_sources(name)').order('discovered_at', { ascending: false }).limit(200),
-    client.from('recipe_drafts').select('*, recipe_draft_ingredients(id), recipe_draft_steps(id), recipe_draft_equipment(equipment_id), recipe_draft_collections(recipe_collections(title))').order('updated_at', { ascending: false }).limit(200),
+    client
+      .from('recipe_drafts')
+      .select(
+        '*, recipe_draft_ingredients(id), recipe_draft_steps(id, instruction), recipe_draft_equipment(equipment_id), recipe_draft_collections(collection_id, recipe_collections(title))',
+      )
+      .order('updated_at', { ascending: false })
+      .limit(200),
     client.from('ingredients').select('id,name,canonical_name,category,aliases,default_unit,active').order('name'),
     client.from('recipe_collections').select('id,title,description,sort_order,active').order('sort_order'),
   ]);
@@ -182,4 +197,123 @@ export async function runAdminAction(action: AdminAction) {
   }
   if (data?.error) throw new Error(data.error);
   return data?.data;
+}
+
+// --- Bulk actions -----------------------------------------------------------------------------
+// These operate directly on tables the admin RLS policies already grant `authenticated` admins
+// full access to (see "Admins manage recipe drafts" / "Admins manage draft collections" in the
+// migrations) rather than round-tripping through the coffee-discovery Edge Function. Publishing
+// itself always stays a single-recipe action routed through `publish-authoring-draft` — there is
+// intentionally no bulk-publish helper here.
+
+export async function bulkAssignCollection(draftIds: string[], collectionId: string) {
+  const client = requireSupabase();
+  const rows = draftIds.map((draftId) => ({ draft_id: draftId, collection_id: collectionId }));
+  const { error } = await client.from('recipe_draft_collections').upsert(rows, { onConflict: 'draft_id,collection_id', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+export async function bulkAssignSource(draftIds: string[], sourceName: string, sourceUrl: string | null) {
+  const client = requireSupabase();
+  const { error } = await client
+    .from('recipe_drafts')
+    .update({ source_name: sourceName, source_url: sourceUrl })
+    .in('id', draftIds);
+  if (error) throw error;
+}
+
+export async function bulkSetNeedsTesting(draftIds: string[], needsTesting: boolean) {
+  const client = requireSupabase();
+  const { error } = await client.from('recipe_drafts').update({ needs_testing: needsTesting }).in('id', draftIds);
+  if (error) throw error;
+}
+
+export async function bulkMarkAttributionComplete(draftIds: string[]) {
+  const client = requireSupabase();
+  const { error } = await client.from('recipe_drafts').update({ attribution_status: 'complete' }).in('id', draftIds);
+  if (error) throw error;
+}
+
+export async function markDraftsReviewed(draftIds: string[], adminUserId: string) {
+  const client = requireSupabase();
+  const { error } = await client
+    .from('recipe_drafts')
+    .update({ last_reviewed_at: new Date().toISOString(), last_reviewed_by: adminUserId })
+    .in('id', draftIds);
+  if (error) throw error;
+}
+
+/** Archives each selected draft one at a time through the existing lifecycle RPC, so audit
+ * logging and the "unpublish if it was published" safety check still run per draft. */
+export async function bulkArchiveDrafts(draftIds: string[]) {
+  for (const draftId of draftIds) {
+    // eslint-disable-next-line no-await-in-loop -- intentionally sequential: each call is a
+    // separate audited lifecycle transition, not a batch we want to fire concurrently.
+    await runAdminAction({ action: 'transition-authoring-draft', draftId, status: 'archived' });
+  }
+}
+
+// --- Export -------------------------------------------------------------------------------------
+
+export type ExportDraftRow = AdminRecipeDraft & {
+  ingredients: Array<{ ingredient_id: string; display_name: string | null; quantity: number; unit: string; position: number }>;
+  steps: Array<{ position: number; instruction: string; timer_seconds: number | null }>;
+  equipment: Array<{ equipment_id: string; position: number; optional: boolean }>;
+  tags: string[];
+  collections: string[];
+};
+
+export async function exportDraftsForBackup(draftIds: string[]): Promise<ExportDraftRow[]> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('recipe_drafts')
+    .select(
+      `*,
+      recipe_draft_ingredients(ingredient_id, display_name, quantity, unit, position),
+      recipe_draft_steps(position, instruction, timer_seconds),
+      recipe_draft_equipment(equipment_id, position, optional),
+      recipe_draft_tags(tag_id),
+      recipe_draft_collections(collection_id)`,
+    )
+    .in('id', draftIds);
+  if (error) throw error;
+
+  return (data ?? []).map((row: any) => ({
+    ...row,
+    ingredients: row.recipe_draft_ingredients ?? [],
+    steps: row.recipe_draft_steps ?? [],
+    equipment: row.recipe_draft_equipment ?? [],
+    tags: (row.recipe_draft_tags ?? []).map((t: { tag_id: string }) => t.tag_id),
+    collections: (row.recipe_draft_collections ?? []).map((c: { collection_id: string }) => c.collection_id),
+  }));
+}
+
+export function draftsToJson(rows: ExportDraftRow[]): string {
+  return JSON.stringify(rows, null, 2);
+}
+
+export function draftsToCsv(rows: ExportDraftRow[]): string {
+  const columns = [
+    'id', 'proposed_title', 'slug', 'status', 'category', 'temperature', 'inspiration_label',
+    'source_name', 'source_url', 'needs_testing', 'tested', 'image_status', 'attribution_status',
+    'validation_status', 'ingredient_count', 'step_count', 'equipment_count', 'collections',
+  ];
+  const escape = (value: unknown) => {
+    const text = value == null ? '' : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const lines = [columns.join(',')];
+  for (const row of rows) {
+    lines.push(
+      [
+        row.id, row.proposed_title, row.slug ?? '', row.status, row.category, row.temperature,
+        row.inspiration_label, row.source_name, row.source_url, row.needs_testing, row.tested,
+        row.image_status, row.attribution_status, row.validation_status,
+        row.ingredients.length, row.steps.length, row.equipment.length, row.collections.join('; '),
+      ]
+        .map(escape)
+        .join(','),
+    );
+  }
+  return lines.join('\n');
 }
