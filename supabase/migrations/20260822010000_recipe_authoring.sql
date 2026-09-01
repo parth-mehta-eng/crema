@@ -607,7 +607,7 @@ on conflict (id) do nothing;
 
 insert into public.discovered_drinks (source_id, external_name, normalized_name, external_description, source_url, category, temperature, flavor_notes, mentioned_ingredients, fingerprint, status)
 select id, 'Brown Sugar Shaken Espresso', 'brown sugar shaken espresso', 'A menu discovery awaiting an original, tested Crema home recipe.', menu_url,
-  'shaken espresso', 'iced', array['brown sugar','strong'], array['espresso','brown sugar','milk'], encode(digest(id::text || ':brown sugar shaken espresso', 'sha256'), 'hex'), 'reviewed'
+  'shaken espresso', 'iced', array['brown sugar','strong'], array['espresso','brown sugar','milk'], encode(extensions.digest(id::text || ':brown sugar shaken espresso', 'sha256'), 'hex'), 'reviewed'
 from public.coffee_sources where slug = 'starbucks'
 on conflict (fingerprint) do nothing;
 
